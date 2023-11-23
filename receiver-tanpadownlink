@@ -1,0 +1,90 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
+#include <esp_now.h>
+#include <WiFi.h>
+#include <lorawan.h>
+
+// Pengaturan Pin untuk LoRa
+#define PIN_CS 15
+#define PIN_RESET 0
+#define PIN_DIO0 27
+#define PIN_DIO1 2
+#define PIN_EN 32
+
+// Kredensial ABP LoRaWAN
+const char *devAddr = "dc6d87d4";
+const char *nwkSKey = "f8c7a45e11a65e3e41a240742257646d";
+const char *appSKey = "c5630bad9ed9b11071e93fbe19205520";
+
+// Struktur untuk data yang diterima dari ESP-NOW
+typedef struct struct_message {
+    float phValue;
+    int soilMoistureValue;
+} struct_message;
+
+struct_message incomingData;
+
+Adafruit_BME280 bme; // Instance dari sensor BME280
+
+const sRFM_pins RFM_pins = {
+    .CS = PIN_CS,
+    .RST = PIN_RESET,
+    .DIO0 = PIN_DIO0,
+    .DIO1 = PIN_DIO1,
+};
+
+void setup() {
+    pinMode(PIN_EN, OUTPUT);
+    digitalWrite(PIN_EN, HIGH);
+    
+    Serial.begin(115200);
+    if (!lora.init()) {
+        Serial.println("RFM95 not detected");
+        delay(5000);
+        return;
+    }
+
+    lora.setDeviceClass(CLASS_C);
+    lora.setDataRate(SF10BW125);
+    lora.setFramePortTx(5);
+    lora.setChannel(MULTI);
+    lora.setTxPower(15);
+    lora.setNwkSKey(nwkSKey);
+    lora.setAppSKey(appSKey);
+    lora.setDevAddr(devAddr);
+
+    WiFi.mode(WIFI_STA);
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("Error initializing ESP-NOW");
+        return;
+    }
+
+    if (!bme.begin(0x76)) {
+        Serial.println("Could not find a valid BME280 sensor, check wiring!");
+        while (1);
+    }
+
+    esp_now_register_recv_cb(OnDataRecv);
+}
+
+void loop() {
+    // Handle LoRaWAN communication
+    lora.update();
+}
+
+void OnDataRecv(const uint8_t * mac, const uint8_t *incoming, int len) {
+    memcpy(&incomingData, incoming, sizeof(incomingData));
+    float temperature = bme.readTemperature();
+    float humidity = bme.readHumidity();
+
+    // Prepare data payload
+    char payload[128]; // Adjust the size as needed
+    snprintf(payload, sizeof(payload), "pH:%.2f, Soil:%d, Temp:%.2f, Hum:%.2f", 
+             incomingData.phValue, incomingData.soilMoistureValue, temperature, humidity);
+
+    // Send data immediately
+    Serial.print("Sending data to Antares: ");
+    Serial.println(payload);
+    lora.sendUplink(payload, strlen(payload), 0);
+}
