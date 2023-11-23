@@ -1,0 +1,84 @@
+#include <esp_now.h>
+#include <WiFi.h>
+
+//Mac Address ESP Master
+uint8_t receiverAddress[] =  {0x54, 0x43, 0xB2, 0x7E, 0xE2, 0x9C};
+
+// Struktur untuk mengirim data
+typedef struct struct_message {
+  float phValue;
+  int soilMoisturePercent;
+} struct_message;
+
+// Buat instance struct_message untuk menyimpan data sensor
+struct_message myData;
+
+// Callback ketika data terkirim
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t sendStatus) {
+  Serial.print("Status pengiriman data: ");
+  Serial.println(sendStatus == ESP_NOW_SEND_SUCCESS ? "Berhasil" : "Gagal");
+}
+
+// Fungsi untuk membaca pH dari ADC di pin 32 dan mengonversinya menggunakan rumus yang diberikan
+float readPH() {
+  int sensorValuePH = analogRead(32); // Baca nilai analog dari sensor pH di pin 32
+  float outputValuePH = (-0.0693 * sensorValuePH) + 7.3855; // Konversi nilai analog menjadi nilai pH
+  // kalibrasi angka normal pH
+  outputValuePH = constrain(outputValuePH, 0.0, 14.0);
+  return outputValuePH; // Kembalikan nilai pH
+}
+
+// Fungsi untuk membaca kelembapan tanah dari ADC di pin 33 dan mengonversi ke persentase kelembapan
+int readSoilMoisture() {
+  int sensorValueMoisture = analogRead(33); // Baca nilai analog dari sensor kelembapan tanah di pin 33
+  // Asumsikan nilai kering menjadi nilai ADC maksimum dan nilai basah menjadi minimum
+  int moisturePercent = map(sensorValueMoisture, 0, 1023, 0, 100); // Peta nilai ke persentase
+  moisturePercent = constrain(moisturePercent, 0, 100); // Batasi nilai untuk memastikan berada dalam rentang 0-100%
+  return moisturePercent; // Kembalikan persentase kelembapan
+}
+
+void setup() {
+  // Inisialisasi Monitor Serial
+  Serial.begin(115200);
+
+  // Set perangkat sebagai Stasiun Wi-Fi
+  WiFi.mode(WIFI_STA);
+
+  // Inisialisasi ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Gagal menginisialisasi ESP-NOW");
+    return;
+  }
+  
+  // Daftar fungsi callback untuk pengiriman data
+  esp_now_register_send_cb(OnDataSent);
+  
+  // Daftar peer
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, receiverAddress, 6);
+  peerInfo.channel = 0;  
+  peerInfo.encrypt = false;
+  
+  // Tambahkan peer
+  if (esp_now_add_peer(&peerInfo) != ESP_OK){
+    Serial.println("Gagal menambahkan peer");
+    return;
+  }
+}
+
+void loop() {
+  // Baca nilai sensor
+  myData.phValue = readPH();
+  myData.soilMoisturePercent = readSoilMoisture();
+  
+  // Kirim pesan melalui ESP-NOW
+  esp_err_t result = esp_now_send(receiverAddress, (uint8_t *) &myData, sizeof(myData));
+  
+  if (result == ESP_OK) {
+    Serial.println("Pengiriman berhasil");
+  } else {
+    Serial.println("Kesalahan dalam pengiriman data");
+  }
+  
+  delay(600000); 
+}
